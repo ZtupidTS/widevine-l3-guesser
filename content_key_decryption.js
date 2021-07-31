@@ -191,6 +191,20 @@ WidevineCrypto.decryptContentKey = async function(licenseRequest, licenseRespons
 
         contentKeys.push(decryptedKey);
         console.log("WidevineDecryptor: Found key: " + toHexString(decryptedKey) + " (KID=" + toHexString(keyId) + ")");
+        try {
+                // if (!window.__wvcounter)
+                //     window.__wvcounter = 0;
+                let _kid = toHexString(keyId);
+                let _hex = toHexString(decryptedKey);
+                let _data = { kid: _kid, base64_key: btoa(String.fromCharCode.apply(null, new Uint8Array(decryptedKey))), hex_key: _hex };
+                window.postMessage({ action: "pushKey", data: _data }, '*');
+                // if (!window.top.document.getElementById(escape(JSON.stringify(_data)))) {
+                //     window.postMessage({ action: "pushKey", data: _data });
+                //     window.postMessage({ action: "noticeKey", count: (++__wvcounter).toString() }); //处理逻辑在content_script
+                // }
+        } catch (e) {
+           console.log(e)
+        }
     }
 
     return contentKeys[0];
