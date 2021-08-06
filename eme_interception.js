@@ -6,21 +6,28 @@
 
  var lastReceivedLicenseRequest = null;
  var lastReceivedLicenseResponse = null;
-
+ var c_sessions=new Map();
  /** Set up the EME listeners. */
 function startEMEInterception() 
 {
   var listener = new EmeInterception();
   listener.setUpListeners();
 }
-
+function SessionData(sess) 
+{
+    this.self=sess;
+    this.licenseRequest=null;
+    this.licenseResponse=null;
+    this.keys=new Map();
+}
  /**
  * Gets called whenever an EME method is getting called or an EME event fires
  */
-EmeInterception.onOperation = function(operationType, args) 
+EmeInterception.onOperation = function(operationType, args,target) 
 {
-    //console.log(operationType);
-    //console.log(args);
+    console.log(operationType);
+    console.log(args);
+    console.log(target);
     if (operationType == "GenerateRequestCall")
     {
        // got initData
@@ -30,17 +37,46 @@ EmeInterception.onOperation = function(operationType, args)
     else if (operationType == "MessageEvent")
     {
         var licenseRequest = args.message;
+        var sesid=args.target.sessionId;
+        var licenseRequestParsed = SignedMessage.read(new Pbf(licenseRequest));
+        if (licenseRequestParsed.type == SignedMessage.MessageType.LICENSE_REQUEST.value) 
+        {
+            if(!c_sessions.has(sesid))
+            {
+                c_sessions.set(sesid,new SessionData(args.target))
+            }
+            var sdat=c_sessions.get(sesid);
+            sdat.licenseRequest=licenseRequest;
+            c_sessions.set(sesid,sdat);
+        };
         lastReceivedLicenseRequest = licenseRequest;
     }
     else if (operationType == "UpdateCall")
     {
         var licenseResponse = args[0];
         var lmsg=SignedMessage.read(new Pbf(licenseResponse));
-        //console.log(lmsg)
-        lastReceivedLicenseResponse = licenseResponse;
-
-        // OK, let's try to decrypt it, assuming the response correlates to the request
-        WidevineCrypto.decryptContentKey(lastReceivedLicenseRequest, lastReceivedLicenseResponse);
+        var sesid=target.sessionId;
+        if (lmsg.type == SignedMessage.MessageType.LICENSE.value) 
+        {
+            if(!c_sessions.has(sesid))
+            {
+                console.log("Got response before request for "+sesid);
+                c_sessions.set(sesid,new SessionData(target))
+            }            
+            var sdat=c_sessions.get(sesid);
+            sdat.licenseResponse=licenseResponse;
+            c_sessions.set(sesid,sdat);
+            if (sdat.licenseResponse!==null && sdat.licenseRequest!==null)
+            {
+                WidevineCrypto.decryptContentKey(sesid,sdat);
+                c_sessions.set(sesid,sdat);
+            }
+        }
+ 
+    }
+    else if (operationType == "KeyStatusesChangeEvent")
+    {
+        args.target.keyStatuses.forEach((k)=>{console.log(k);})
     }
 };
 
@@ -53,6 +89,7 @@ function EmeInterception()
 {
   this.unprefixedEmeEnabled = Navigator.prototype.requestMediaKeySystemAccess ? true : false;
   this.prefixedEmeEnabled = HTMLMediaElement.prototype.webkitGenerateKeyRequest ? true : false;
+ 
 }
 
 
@@ -90,7 +127,6 @@ EmeInterception.prototype.addListenersToNavigator_ = function()
 {
   if (navigator.listenersAdded_) 
     return;
-
   var originalRequestMediaKeySystemAccessFn = EmeInterception.extendEmeMethod(
       navigator,
       navigator.requestMediaKeySystemAccess,
@@ -114,7 +150,35 @@ EmeInterception.prototype.addListenersToNavigator_ = function()
     }.bind(this));
 
   }.bind(this);
+  if(navigator.mediaCapabilities)
+  {
+      if(navigator.mediaCapabilities.decodingInfo)
+      {
+            var originalDecodingInfoFn = EmeInterception.extendEmeMethod(
+      navigator.mediaCapabilities, navigator.mediaCapabilities.decodingInfo,"DecodingInfoCall");
+       navigator.mediaCapabilities.decodingInfo = function() 
+  {
+    var self = arguments[0];
+    console.log(arguments);
+    // slice "It is recommended that a robustness level be specified" warning
+    var modifiedArguments = arguments;
+    var modifiedOptions = EmeInterception.addRobustnessLevelIfNeededForDecodingInfo(arguments);
+    modifiedArguments = modifiedOptions;
 
+    var result = originalDecodingInfoFn.apply(null, modifiedArguments);
+    // Attach listeners to returned MediaKeySystemAccess object
+    return result.then(function(res) 
+    {
+        //console.log(res);
+        if(res.keySystemAccess)
+      this.addListenersToMediaKeySystemAccess_(res.keySystemAccess);
+      return Promise.resolve(res);
+    }.bind(this));
+
+  }.bind(this);
+  
+      }
+  }
   navigator.listenersAdded_ = true;
 };
 
@@ -360,7 +424,7 @@ EmeInterception.extendEmeMethod = function(element, originalFn, type)
  */
 EmeInterception.interceptCall = function(type, args, result, target) 
 {
-  EmeInterception.onOperation(type, args);
+  EmeInterception.onOperation(type, args,target);
   return args;
 };
 
@@ -373,10 +437,37 @@ EmeInterception.interceptCall = function(type, args, result, target)
  */
 EmeInterception.interceptEvent = function(type, event) 
 {
-  EmeInterception.onOperation(type, event);
+  EmeInterception.onOperation(type, event,null);
   return event;
 };
-
+EmeInterception.addRobustnessLevelIfNeededForDecodingInfo = function(options)
+{
+   for (var i = 0; i < options.length; i++)
+  {
+    var option = options[i];
+    if(!option.keySystemConfiguration) continue;
+    var video = option.keySystemConfiguration["video"];
+    var audio = option.keySystemConfiguration["audio"];
+    if (video != null)
+    {
+        if (video["robustness"]==undefined || !video["robustness"].length ||video["robustness"].length ==0)
+        {
+            video["robustness"]="SW_SECURE_CRYPTO";
+        }
+    }
+       if (audio != null)
+    {
+        if (audio["robustness"]==undefined || !audio["robustness"].length ||audio["robustness"].length ==0)
+        {
+            audio["robustness"]="SW_SECURE_CRYPTO";
+        }
+    }
+    option.keySystemConfiguration.video=video;
+    option.keySystemConfiguration.audio=audio;
+     options[i]=option;
+  }    
+  return options;
+}
 EmeInterception.addRobustnessLevelIfNeeded = function(options)
 {
   for (var i = 0; i < options.length; i++)

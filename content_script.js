@@ -1,3 +1,12 @@
+window.addEventListener("PassToBackground", function(evt) {
+  chrome.runtime.sendMessage(evt.detail.item,response => {
+    var val=response.value;
+    if (!val) val=null;
+    var event = new CustomEvent("BackgroundReply_"+evt.detail.id, {detail: val});
+    window.dispatchEvent(event);}
+    );
+}, false);
+
 injectScripts();
 var Module=null;
 

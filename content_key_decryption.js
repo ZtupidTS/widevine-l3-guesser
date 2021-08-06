@@ -4,7 +4,6 @@ This is where the magic happens
 
 
 var WidevineCrypto = {};
-var _freeStr, stringToUTF8, writeArrayToMemory, UTF8ToString, stackSave, stackRestore, stackAlloc;
 
 
 // Convert a hex string to a byte array
@@ -23,82 +22,87 @@ function bytesToHex(bytes) {
     }
     return hex.join("");
 }
-
+var _evid=10;
+function sendMessagePromise( item) {
+    return new Promise((resolve, reject) => {
+        var id=_evid;
+        _evid+=1;
+        var event = new CustomEvent("PassToBackground", {detail: {item:item,id:id}});
+        window.dispatchEvent(event);
+        window.addEventListener("BackgroundReply_"+id, function(evt) {
+  
+            if(evt.detail) {
+                resolve(evt.detail);
+            } else {
+                reject('Something wrong');
+            }
+        },{once:true});
+    });
+}
 
 
 (async function() {
 
+WidevineCrypto.cryptoJS=CryptoJS;
 // The public 2048-bit RSA key Widevine uses for Chrome devices in L3, on Windows
-WidevineCrypto.Module= await WasmDsp();
-await WidevineCrypto.Module.ready;
-_freeStr=WidevineCrypto.Module._freeStr;
-stringToUTF8=WidevineCrypto.Module.stringToUTF8;
-writeArrayToMemory=WidevineCrypto.Module.writeArrayToMemory;
-UTF8ToString=WidevineCrypto.Module.UTF8ToString;
-stackSave=WidevineCrypto.Module.stackSave;
-stackRestore=WidevineCrypto.Module.stackRestore;
-stackAlloc=WidevineCrypto.Module.stackAlloc;
+WidevineCrypto.initLog=function()
+{
+    try
+    {
+        if(document.body)
+        {
+          var i = document.createElement('iframe'); i.style.display = 'none'; document.body.appendChild(i);
+          window.sconsole = i.contentWindow.console;  
+          if (window.sconsole)
+          this._log=window.sconsole.log;
+        }
 
-WidevineCrypto.getCFunc = function (ident) {
-  return this.Module[`_${ident}`]; // closure exported function
-}
-WidevineCrypto.scall = function (ident, returnType, argTypes, args, opts) {
-  const toC = {
-    string (str) {
-      let ret = 0;
-      if (str !== null && str !== undefined && str !== 0) {
-        const len = (str.length << 2) + 1;
-        ret = stackAlloc(len);
-        stringToUTF8(str, ret, len);
-      }
-      return ret;
-    },
-    array (arr) {
-      const ret = stackAlloc(arr.length);
-      writeArrayToMemory(arr, ret);
-      return ret;
     }
-  };
-  function convertReturnValue (ret) {
-    if (returnType === 'string') return UTF8ToString(ret);
-    if (returnType === 'boolean') return Boolean(ret);
-    return ret;
-  }
-  const func = this.getCFunc(ident);
-  const cArgs = [];
-  let stack = 0;
-  if (args) {
-    for (let i = 0; i < args.length; i++) {
-      const converter = toC[argTypes[i]];
-      if (converter) {
-        if (stack === 0) stack = stackSave();
-        cArgs[i] = converter(args[i]);
-      } else {
-        cArgs[i] = args[i];
-      }
+    catch
+    {
+        console.info("Init log failed");
     }
-  }
-  const _ret = func.apply(null, cArgs);
-  const ret = convertReturnValue(_ret);
-  _freeStr(_ret);
-  if (stack !== 0) stackRestore(stack);
-  return ret;
 }
-WidevineCrypto.swrap=function  (ident, returnType, argTypes, opts) {
-  argTypes = argTypes || [];
-  const numericArgs = argTypes.every((type) => type === 'number');
-  const numericRet = returnType !== 'string';
-  if (numericRet && numericArgs && !opts) {
-    return this.getCFunc(ident);
-  }
-  return function () {
-     
-    return this.scall(ident, returnType, argTypes, arguments, opts);
-  };
+WidevineCrypto._log=null;
+WidevineCrypto.log=function() {
+    if(this._log)
+    {
+        this._log.apply(null,arguments);
+        return;
+    }
+    if (window.sconsole)
+        this._log=window.sconsole.log;
+    else
+        this.initLog()
+     if(this._log)
+    {
+        this._log.apply(null,arguments);
+    }
+    else
+    {
+        //fallback
+        console.log.apply(null,arguments);
+    }
 }
-WidevineCrypto.tryUsingDecoder = WidevineCrypto.swrap('tryUsingDecoder', 'string', ['string']); 
+
+//WidevineCrypto.Module= await WasmDsp();
+//await WidevineCrypto.Module.ready;
+//_freeStr=WidevineCrypto.Module._freeStr;
+//stringToUTF8=WidevineCrypto.Module.stringToUTF8;
+//writeArrayToMemory=WidevineCrypto.Module.writeArrayToMemory;
+//UTF8ToString=WidevineCrypto.Module.UTF8ToString;
+//stackSave=WidevineCrypto.Module.stackSave;
+//stackRestore=WidevineCrypto.Module.stackRestore;
+//stackAlloc=WidevineCrypto.Module.stackAlloc;
 
 
+//WidevineCrypto.tryUsingDecoder = WidevineCrypto.swrap('tryUsingDecoder', 'string', ['string']); 
+
+WidevineCrypto.tryUsingDecoder = async function (data)
+{
+    var res=await sendMessagePromise({name:"dec",value:data});
+    return res;
+}
 WidevineCrypto.chromeRSAPublicKey = 
 `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvKg9eT9JPEnfVYYS50x3
@@ -126,11 +130,11 @@ WidevineCrypto.tryDecodingKey=async function(encKey)
 {
 
     let hex=bytesToHex(encKey);
-    let res=this.tryUsingDecoder(hex);
-    console.log(hex);
+    let res=await this.tryUsingDecoder(hex);
+    this.log(hex);
    
-    console.log("Output");
-    console.log(res);
+    this.log("Output");
+    this.log(res);
     if(res.length<10)
     {
         throw "Could not remove padding, probably invalid key or decoding failure"
@@ -138,15 +142,16 @@ WidevineCrypto.tryDecodingKey=async function(encKey)
     return new Uint8Array(hexToBytes(res));
 }
 
-WidevineCrypto.decryptContentKey = async function(licenseRequest, licenseResponse)
+WidevineCrypto.decryptContentKey = async function(sesid,sdat)
 {
-    licenseRequest = SignedMessage.read(new Pbf(licenseRequest));
-    licenseResponse = SignedMessage.read(new Pbf(licenseResponse));
+    await this.initLog();
+    licenseRequest = SignedMessage.read(new Pbf(sdat.licenseRequest));
+    licenseResponse = SignedMessage.read(new Pbf(sdat.licenseResponse));
     //console.log("Decrypting?")
     //console.log("Request (from us)")
-    console.log(licenseRequest)
+    this.log(licenseRequest)
     //console.log("Response")
-    console.log(licenseResponse)
+    this.log(licenseResponse)
     if (licenseRequest.type != SignedMessage.MessageType.LICENSE_REQUEST.value) return;
 
     license = License.read(new Pbf(licenseResponse.msg));
@@ -158,7 +163,7 @@ WidevineCrypto.decryptContentKey = async function(licenseRequest, licenseRespons
                                                               licenseRequest.signature, licenseRequest.msg)
     if (!signatureVerified)
     {
-        console.log("Can't verify license request signature; either the platform is wrong or the key has changed!");
+        this.log("Can't verify license request signature; either the platform is wrong or the key has changed!");
         return null;
     }
     var sessionKey=await this.tryDecodingKey(licenseResponse.session_key);
@@ -172,7 +177,7 @@ WidevineCrypto.decryptContentKey = async function(licenseRequest, licenseRespons
 
     // calculate encrypt_key using CMAC
     var encryptKey = wordToByteArray(
-                    CryptoJS.CMAC(arrayToWordArray(new Uint8Array(sessionKey)), 
+                    this.cryptoJS.CMAC(arrayToWordArray(new Uint8Array(sessionKey)), 
                                   arrayToWordArray(new Uint8Array(context_enc))).words);
 
     // iterate the keys we got to find those we want to decrypt (the content key(s))
@@ -187,10 +192,10 @@ WidevineCrypto.decryptContentKey = async function(licenseRequest, licenseRespons
 
         // finally decrypt the content key
         var decryptedKey = wordToByteArray(
-            CryptoJS.AES.decrypt({ ciphertext: arrayToWordArray(keyData) }, arrayToWordArray(encryptKey), { iv: arrayToWordArray(keyIv) }).words);
-
+            this.cryptoJS.AES.decrypt({ ciphertext: arrayToWordArray(keyData) }, arrayToWordArray(encryptKey), { iv: arrayToWordArray(keyIv) }).words);
+        sdat.keys.set(toHexString(keyId),toHexString(decryptedKey));
         contentKeys.push(decryptedKey);
-        console.log("WidevineDecryptor: Found key: " + toHexString(decryptedKey) + " (KID=" + toHexString(keyId) + ")");
+        this.log("WidevineDecryptor: Session: "+sesid+ " KID= " + toHexString(keyId)+" Key: "+toHexString(decryptedKey) );
         try {
                 // if (!window.__wvcounter)
                 //     window.__wvcounter = 0;
